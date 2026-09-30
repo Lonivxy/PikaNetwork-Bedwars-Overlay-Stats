@@ -416,7 +416,7 @@ func wndProc(hwnd uintptr, msg uint32, wParam, lParam uintptr) uintptr {
 	case WM_LBUTTONDOWN:
 		x := int32(int16(lParam & 0xFFFF))
 		y := int32(int16((lParam >> 16) & 0xFFFF))
-		if y < headerHeight && x >= baseWidth-105 && x <= baseWidth-52 {
+		if y < headerHeight && x >= 220 && x <= 305 {
 			state.Lock()
 			state.SettingsOpen = !state.SettingsOpen
 			state.Unlock()
@@ -628,9 +628,10 @@ func paint(hwnd uintptr) {
 	defer del(semiFont)
 
 	text(hdc, titleFont, 20, 12, "PikaStats Overlay", rgb(239, 242, 248))
-	text(hdc, smallFont, 21, 36, "X show / hide   •   Leaderboard place shown for Top 100   •   -stats Player", rgb(139, 149, 166))
+	text(hdc, smallFont, 21, 36, "Shortcut: "+toggleKeyLabel()+"   •   -stats Player", rgb(139, 149, 166))
 	text(hdc, semiFont, baseWidth-32, 18, "×", rgb(184, 192, 205))
-	text(hdc, smallFont, baseWidth-103, 21, "Settings", rgb(139, 149, 166))
+	drawRoundBox(hdc, 220, 28, 305, 51, 10, rgb(39, 46, 59), rgb(77, 88, 108))
+	text(hdc, smallFont, 234, 33, "Settings", rgb(213, 220, 232))
 	if settingsOpen {
 		paintSettings(hdc, bodyFont, smallFont, semiFont)
 		return
