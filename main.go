@@ -66,6 +66,9 @@ const (
 	HWND_TOPMOST      = ^uintptr(0)
 	LWA_ALPHA         = 0x00000002
 	VK_X              = 0x58
+	VK_F8             = 0x77
+	VK_F9             = 0x78
+	VK_F10            = 0x79
 	VK_TAB            = 0x09
 	VK_T              = 0x54
 	VK_RETURN         = 0x0D
@@ -249,6 +252,7 @@ type AppState struct {
 	ScanUntil       time.Time
 	ExpectedPlayers int
 	SortBy          string
+	SettingsOpen    bool
 }
 
 type logCursor struct {
@@ -259,6 +263,13 @@ type logCursor struct {
 var state = AppState{Players: make(map[string]*PlayerStats), Status: "Waiting for Lunar Client...", X: -1, Y: 72, SortBy: "auto"}
 var leaderboardInterval = "total"
 var leaderboardMode = "ALL_MODES"
+var showLevel = true
+var showFKDR = true
+var showKills = true
+var showFinals = true
+var showBeds = true
+var showWins = true
+var toggleKey uint16 = VK_X
 var refreshPending int32
 var requestQueue = make(chan string, 64)
 var queuedMu sync.Mutex
@@ -405,8 +416,21 @@ func wndProc(hwnd uintptr, msg uint32, wParam, lParam uintptr) uintptr {
 	case WM_LBUTTONDOWN:
 		x := int32(int16(lParam & 0xFFFF))
 		y := int32(int16((lParam >> 16) & 0xFFFF))
+		if y < headerHeight && x >= baseWidth-105 && x <= baseWidth-52 {
+			state.Lock()
+			state.SettingsOpen = !state.SettingsOpen
+			state.Unlock()
+			resizeAndRepaint(hwnd)
+			return 0
+		}
 		if y < headerHeight && x > baseWidth-48 {
 			procDestroyWindow.Call(hwnd)
+			return 0
+		}
+		state.RLock()
+		settingsOpen := state.SettingsOpen
+		state.RUnlock()
+		if settingsOpen && handleSettingsClick(hwnd, x, y) {
 			return 0
 		}
 		if y < headerHeight {
@@ -434,6 +458,12 @@ func wndProc(hwnd uintptr, msg uint32, wParam, lParam uintptr) uintptr {
 }
 
 func desiredHeight() int32 {
+	state.RLock()
+	settingsOpen := state.SettingsOpen
+	state.RUnlock()
+	if settingsOpen {
+		return headerHeight + 300
+	}
 	state.RLock()
 	n := len(state.Order)
 	state.RUnlock()
@@ -534,6 +564,7 @@ func paint(hwnd uintptr) {
 			rows = append(rows, &cp)
 		}
 	}
+	settingsOpen := state.SettingsOpen
 	state.RUnlock()
 
 	sort.SliceStable(rows, func(i, j int) bool {
@@ -599,6 +630,11 @@ func paint(hwnd uintptr) {
 	text(hdc, titleFont, 20, 12, "PikaStats Overlay", rgb(239, 242, 248))
 	text(hdc, smallFont, 21, 36, "X show / hide   •   Leaderboard place shown for Top 100   •   -stats Player", rgb(139, 149, 166))
 	text(hdc, semiFont, baseWidth-32, 18, "×", rgb(184, 192, 205))
+	text(hdc, smallFont, baseWidth-103, 21, "Settings", rgb(139, 149, 166))
+	if settingsOpen {
+		paintSettings(hdc, bodyFont, smallFont, semiFont)
+		return
+	}
 
 	chip := "WAITING"
 	chipColor := rgb(118, 126, 142)
@@ -621,12 +657,24 @@ func paint(hwnd uintptr) {
 	y := headerHeight
 	fillRect(hdc, 0, y, baseWidth, y+columnsHeight, rgb(20, 23, 31))
 	text(hdc, smallFont, 20, y+8, "PLAYER", rgb(141, 151, 168))
-	text(hdc, smallFont, 310, y+8, "LVL", rgb(141, 151, 168))
-	text(hdc, smallFont, 367, y+8, "FKDR", rgb(141, 151, 168))
-	text(hdc, smallFont, 440, y+8, "KILLS", rgb(141, 151, 168))
-	text(hdc, smallFont, 525, y+8, "FINALS", rgb(141, 151, 168))
-	text(hdc, smallFont, 620, y+8, "BEDS", rgb(141, 151, 168))
-	text(hdc, smallFont, 705, y+8, "WINS", rgb(141, 151, 168))
+	if showLevel {
+		text(hdc, smallFont, 310, y+8, "LVL", rgb(141, 151, 168))
+	}
+	if showFKDR {
+		text(hdc, smallFont, 367, y+8, "FKDR", rgb(141, 151, 168))
+	}
+	if showKills {
+		text(hdc, smallFont, 440, y+8, "KILLS", rgb(141, 151, 168))
+	}
+	if showFinals {
+		text(hdc, smallFont, 525, y+8, "FINALS", rgb(141, 151, 168))
+	}
+	if showBeds {
+		text(hdc, smallFont, 620, y+8, "BEDS", rgb(141, 151, 168))
+	}
+	if showWins {
+		text(hdc, smallFont, 705, y+8, "WINS", rgb(141, 151, 168))
+	}
 
 	y += columnsHeight
 	if len(rows) == 0 {
@@ -682,18 +730,30 @@ func paint(hwnd uintptr) {
 				text(hdc, smallFont, 310, ry+12, "API unavailable", rgb(178, 132, 136))
 				continue
 			}
-			text(hdc, bodyFont, 310, ry+10, fmt.Sprintf("%d", p.Level), levelColor(p.Level))
+			if showLevel {
+				text(hdc, bodyFont, 310, ry+10, fmt.Sprintf("%d", p.Level), levelColor(p.Level))
+			}
 			fk := "0.00"
 			if p.Infinite {
 				fk = "∞"
 			} else {
 				fk = fmt.Sprintf("%.2f", p.FKDR)
 			}
-			text(hdc, bodyFont, 367, ry+10, fk, fkdrColor(p.FKDR, p.Infinite))
-			drawStatWithLeaderboardPlace(hdc, bodyFont, semiFont, 440, ry, p.Kills, statGray, p.KillsPlace)
-			drawStatWithLeaderboardPlace(hdc, bodyFont, semiFont, 525, ry, p.FinalKills, finalsColor(p.FinalKills), p.FinalsPlace)
-			drawStatWithLeaderboardPlace(hdc, bodyFont, semiFont, 620, ry, p.Beds, bedsColor(p.Beds), p.BedsPlace)
-			drawStatWithLeaderboardPlace(hdc, bodyFont, semiFont, 705, ry, p.Wins, winsColor(p.Wins), p.WinsPlace)
+			if showFKDR {
+				text(hdc, bodyFont, 367, ry+10, fk, fkdrColor(p.FKDR, p.Infinite))
+			}
+			if showKills {
+				drawStatWithLeaderboardPlace(hdc, bodyFont, semiFont, 440, ry, p.Kills, statGray, p.KillsPlace)
+			}
+			if showFinals {
+				drawStatWithLeaderboardPlace(hdc, bodyFont, semiFont, 525, ry, p.FinalKills, finalsColor(p.FinalKills), p.FinalsPlace)
+			}
+			if showBeds {
+				drawStatWithLeaderboardPlace(hdc, bodyFont, semiFont, 620, ry, p.Beds, bedsColor(p.Beds), p.BedsPlace)
+			}
+			if showWins {
+				drawStatWithLeaderboardPlace(hdc, bodyFont, semiFont, 705, ry, p.Wins, winsColor(p.Wins), p.WinsPlace)
+			}
 		}
 	}
 
@@ -710,6 +770,105 @@ func paint(hwnd uintptr) {
 		foot = "Lunar log found • waiting for PikaNetwork"
 	}
 	text(hdc, smallFont, 18, fy+8, foot, rgb(117, 128, 145))
+}
+
+func paintSettings(hdc, bodyFont, smallFont, semiFont uintptr) {
+	y := headerHeight
+	fillRect(hdc, 0, y, baseWidth, y+300, rgb(20, 23, 31))
+	text(hdc, bodyFont, 20, y+18, "Overlay settings", rgb(239, 242, 248))
+	text(hdc, smallFont, 20, y+45, "Click a stat to show or hide its column", rgb(139, 149, 166))
+	drawSettingToggle(hdc, semiFont, 20, y+70, "Level", showLevel)
+	drawSettingToggle(hdc, semiFont, 170, y+70, "FKDR", showFKDR)
+	drawSettingToggle(hdc, semiFont, 320, y+70, "Kills", showKills)
+	drawSettingToggle(hdc, semiFont, 470, y+70, "Finals", showFinals)
+	drawSettingToggle(hdc, semiFont, 620, y+70, "Beds", showBeds)
+	drawSettingToggle(hdc, semiFont, 20, y+105, "Wins", showWins)
+	text(hdc, smallFont, 20, y+150, "Leaderboard interval: "+leaderboardIntervalLabel(), rgb(139, 149, 166))
+	text(hdc, semiFont, 20, y+173, "Lifetime", rgb(231, 235, 242))
+	text(hdc, semiFont, 135, y+173, "Monthly", rgb(231, 235, 242))
+	text(hdc, semiFont, 250, y+173, "Weekly", rgb(231, 235, 242))
+	text(hdc, smallFont, 20, y+205, "Leaderboard mode: "+leaderboardModeLabel(), rgb(139, 149, 166))
+	text(hdc, semiFont, 20, y+228, "All", rgb(231, 235, 242))
+	text(hdc, semiFont, 95, y+228, "Solo", rgb(231, 235, 242))
+	text(hdc, semiFont, 170, y+228, "Doubles", rgb(231, 235, 242))
+	text(hdc, semiFont, 270, y+228, "Triples", rgb(231, 235, 242))
+	text(hdc, semiFont, 365, y+228, "Quads", rgb(231, 235, 242))
+	text(hdc, smallFont, 20, y+260, "Show/hide shortcut: "+toggleKeyLabel()+"   (choose: X, F8, F9, F10)", rgb(139, 149, 166))
+	text(hdc, semiFont, 20, y+281, "X", rgb(231, 235, 242))
+	text(hdc, semiFont, 75, y+281, "F8", rgb(231, 235, 242))
+	text(hdc, semiFont, 140, y+281, "F9", rgb(231, 235, 242))
+	text(hdc, semiFont, 205, y+281, "F10", rgb(231, 235, 242))
+}
+
+func drawSettingToggle(hdc, font uintptr, x, y int32, label string, enabled bool) {
+	mark := "[ ] "
+	if enabled {
+		mark = "[x] "
+	}
+	text(hdc, font, x, y, mark+label, rgb(231, 235, 242))
+}
+
+func handleSettingsClick(hwnd uintptr, x, y int32) bool {
+	rel := y - headerHeight
+	if rel >= 60 && rel < 100 {
+		switch {
+		case x < 150:
+			showLevel = !showLevel
+		case x < 300:
+			showFKDR = !showFKDR
+		case x < 450:
+			showKills = !showKills
+		case x < 600:
+			showFinals = !showFinals
+		default:
+			showBeds = !showBeds
+		}
+	} else if rel >= 100 && rel < 135 && x < 150 {
+		showWins = !showWins
+	} else if rel >= 155 && rel < 190 {
+		if x < 115 {
+			leaderboardInterval = "total"
+		} else if x < 230 {
+			leaderboardInterval = "monthly"
+		} else if x < 345 {
+			leaderboardInterval = "weekly"
+		} else {
+			return false
+		}
+	} else if rel >= 210 && rel < 245 {
+		switch {
+		case x < 75:
+			leaderboardMode = "ALL_MODES"
+		case x < 150:
+			leaderboardMode = "SOLO"
+		case x < 260:
+			leaderboardMode = "DOUBLES"
+		case x < 355:
+			leaderboardMode = "TRIPLES"
+		case x < 455:
+			leaderboardMode = "QUADS"
+		default:
+			return false
+		}
+	} else if rel >= 265 && rel < 300 {
+		switch {
+		case x < 55:
+			toggleKey = VK_X
+		case x < 125:
+			toggleKey = VK_F8
+		case x < 190:
+			toggleKey = VK_F9
+		case x < 270:
+			toggleKey = VK_F10
+		default:
+			return false
+		}
+	} else {
+		return false
+	}
+	saveConfig()
+	resizeAndRepaint(hwnd)
+	return true
 }
 
 // PvP-style stat tiers requested by the user.
@@ -1305,7 +1464,7 @@ func discoverLogCandidates() []string {
 func watchToggleKey() {
 	wasDown := false
 	for {
-		r, _, _ := procGetAsyncKeyState.Call(VK_X)
+		r, _, _ := procGetAsyncKeyState.Call(uintptr(toggleKey))
 		down := int16(r&0xffff) < 0
 		if down && !wasDown {
 			state.RLock()
@@ -2468,6 +2627,14 @@ type config struct {
 	Y                   int32  `json:"y"`
 	LeaderboardInterval string `json:"leaderboardInterval"`
 	LeaderboardMode     string `json:"leaderboardMode"`
+	ShowLevel           bool   `json:"showLevel"`
+	ShowFKDR            bool   `json:"showFKDR"`
+	ShowKills           bool   `json:"showKills"`
+	ShowFinals          bool   `json:"showFinals"`
+	ShowBeds            bool   `json:"showBeds"`
+	ShowWins            bool   `json:"showWins"`
+	ToggleKey           uint16 `json:"toggleKey"`
+	SettingsVersion     int    `json:"settingsVersion"`
 }
 
 func init() {
@@ -2480,6 +2647,12 @@ func init() {
 			state.Y = c.Y
 			leaderboardInterval = normalizeLeaderboardInterval(c.LeaderboardInterval)
 			leaderboardMode = normalizeLeaderboardMode(c.LeaderboardMode)
+			if c.SettingsVersion >= 1 {
+				showLevel, showFKDR, showKills, showFinals, showBeds, showWins, toggleKey = c.ShowLevel, c.ShowFKDR, c.ShowKills, c.ShowFinals, c.ShowBeds, c.ShowWins, c.ToggleKey
+				if toggleKey == 0 {
+					toggleKey = VK_X
+				}
+			}
 		}
 	}
 }
@@ -2492,12 +2665,32 @@ func saveWindowPosition(hwnd uintptr) {
 		state.Unlock()
 		p := configPath()
 		_ = os.MkdirAll(filepath.Dir(p), 0755)
-		b, _ := json.MarshalIndent(config{
-			X: r.Left, Y: r.Top,
-			LeaderboardInterval: leaderboardInterval,
-			LeaderboardMode:     leaderboardMode,
-		}, "", "  ")
-		_ = os.WriteFile(p, b, 0644)
+		saveConfigAt(r.Left, r.Top)
+	}
+}
+func saveConfig() { state.RLock(); x, y := state.X, state.Y; state.RUnlock(); saveConfigAt(x, y) }
+func saveConfigAt(x, y int32) {
+	p := configPath()
+	_ = os.MkdirAll(filepath.Dir(p), 0755)
+	b, _ := json.MarshalIndent(config{
+		X: x, Y: y,
+		LeaderboardInterval: leaderboardInterval,
+		LeaderboardMode:     leaderboardMode,
+		ShowLevel:           showLevel, ShowFKDR: showFKDR, ShowKills: showKills, ShowFinals: showFinals, ShowBeds: showBeds, ShowWins: showWins, ToggleKey: toggleKey, SettingsVersion: 1,
+	}, "", "  ")
+	_ = os.WriteFile(p, b, 0644)
+}
+
+func toggleKeyLabel() string {
+	switch toggleKey {
+	case VK_F8:
+		return "F8"
+	case VK_F9:
+		return "F9"
+	case VK_F10:
+		return "F10"
+	default:
+		return "X"
 	}
 }
 

@@ -51,6 +51,15 @@ It reads Minecraft/Lunar log output to detect the current TAB roster, fetches pu
 
 Press **X** to show or hide the overlay.
 
+## In-app settings
+
+Click **Settings** in the overlay header to open the in-app settings screen. Changes save immediately.
+
+- Show or hide: Level, FKDR, Kills, Final Kills, Beds, and Wins.
+- Choose leaderboard interval: Lifetime, Monthly, or Weekly.
+- Choose leaderboard mode: All Modes, Solo, Doubles, Triples, or Quads.
+- Change the global show/hide shortcut: `X`, `F8`, `F9`, or `F10`.
+
 ## Leaderboard places and settings
 
 The overlay shows a player's global place (`#1` through `#100`) immediately after **Kills**, **Final Kills**, **Beds**, and **Wins** when the player is in the Top 100 for that statistic, for example `9,999 #2`.
