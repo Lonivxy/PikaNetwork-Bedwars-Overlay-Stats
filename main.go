@@ -28,9 +28,11 @@ import (
 
 const (
 	appName        = "PikaStats Overlay"
-	appVersion     = "3.10.2"
+	appVersion     = "3.11.0"
 	windowClass    = "PikaStatsOverlayWindowClass"
 	baseWidth      = int32(860)
+	minWidth       = int32(860)
+	maxTableRows   = int32(12)
 	headerHeight   = int32(58)
 	columnsHeight  = int32(30)
 	rowHeight      = int32(36)
@@ -49,11 +51,16 @@ const (
 	WM_LBUTTONDOWN    = 0x0201
 	WM_LBUTTONUP      = 0x0202
 	WM_MOUSEMOVE      = 0x0200
+	WM_MOUSEWHEEL     = 0x020A
 	WM_NCHITTEST      = 0x0084
+	WM_SIZE           = 0x0005
 	WM_ERASEBKGND     = 0x0014
 	WM_EXITSIZEMOVE   = 0x0232
 	HTCLIENT          = 1
 	HTCAPTION         = 2
+	HTRIGHT           = 11
+	HTBOTTOM          = 15
+	HTBOTTOMRIGHT     = 17
 	WS_POPUP          = 0x80000000
 	WS_EX_TOPMOST     = 0x00000008
 	WS_EX_TOOLWINDOW  = 0x00000080
@@ -66,6 +73,7 @@ const (
 	HWND_TOPMOST      = ^uintptr(0)
 	LWA_ALPHA         = 0x00000002
 	VK_X              = 0x58
+	VK_SPACE          = 0x20
 	VK_F8             = 0x77
 	VK_F9             = 0x78
 	VK_F10            = 0x79
@@ -252,6 +260,8 @@ type AppState struct {
 	ScanUntil       time.Time
 	ExpectedPlayers int
 	SortBy          string
+	SortDesc        bool
+	Scroll          int
 	SettingsOpen    bool
 }
 
@@ -261,6 +271,8 @@ type logCursor struct {
 }
 
 var state = AppState{Players: make(map[string]*PlayerStats), Status: "Waiting for Lunar Client...", X: -1, Y: 72, SortBy: "auto"}
+var windowWidth int32 = baseWidth
+var windowHeight int32
 var leaderboardInterval = "total"
 var leaderboardMode = "ALL_MODES"
 var showLevel = true
@@ -269,6 +281,7 @@ var showKills = true
 var showFinals = true
 var showBeds = true
 var showWins = true
+var fuzzyLB = true
 var toggleKeyCode uint32 = VK_X
 var shortcutCapturing int32
 var refreshPending int32
@@ -367,7 +380,7 @@ func runWindow() {
 	}
 
 	screenW, _, _ := procGetSystemMetrics.Call(0)
-	x := int32(screenW) - baseWidth - 24
+	x := int32(screenW) - windowWidth - 24
 	state.Lock()
 	if state.X >= 0 {
 		x = state.X
@@ -375,7 +388,8 @@ func runWindow() {
 	y := state.Y
 	state.Unlock()
 	h := desiredHeight()
-	hwnd, _, _ := procCreateWindowExW.Call(WS_EX_TOPMOST|WS_EX_TOOLWINDOW|WS_EX_LAYERED, uintptr(unsafe.Pointer(className)), uintptr(unsafe.Pointer(utf16p(appName))), WS_POPUP, uintptr(x), uintptr(y), uintptr(baseWidth), uintptr(h), 0, 0, hinst, 0)
+	windowHeight = h
+	hwnd, _, _ := procCreateWindowExW.Call(WS_EX_TOPMOST|WS_EX_TOOLWINDOW|WS_EX_LAYERED, uintptr(unsafe.Pointer(className)), uintptr(unsafe.Pointer(utf16p(appName))), WS_POPUP, uintptr(x), uintptr(y), uintptr(windowWidth), uintptr(h), 0, 0, hinst, 0)
 	if hwnd == 0 {
 		return
 	}
@@ -383,7 +397,7 @@ func runWindow() {
 	state.HWND = hwnd
 	state.Unlock()
 	procSetLayeredWindowAttributes.Call(hwnd, 0, 242, LWA_ALPHA)
-	applyRoundedRegion(hwnd, baseWidth, h)
+	applyRoundedRegion(hwnd, windowWidth, h)
 	procSetWindowPos.Call(hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE|SWP_NOMOVE|SWP_NOACTIVATE|0x0001) // NOSIZE=1
 	// Always show immediately so startup can never look like a failed launch.
 	state.Lock()
@@ -406,6 +420,34 @@ func runWindow() {
 
 func wndProc(hwnd uintptr, msg uint32, wParam, lParam uintptr) uintptr {
 	switch msg {
+	case WM_NCHITTEST:
+		var r RECT
+		if v, _, _ := procGetWindowRect.Call(hwnd, uintptr(unsafe.Pointer(&r))); v != 0 {
+			x := int32(int16(lParam & 0xFFFF))
+			y := int32(int16((lParam >> 16) & 0xFFFF))
+			rightEdge := x >= r.Right-8
+			bottomEdge := y >= r.Bottom-8
+			if rightEdge && bottomEdge {
+				return HTBOTTOMRIGHT
+			}
+			if rightEdge {
+				return HTRIGHT
+			}
+			if bottomEdge {
+				return HTBOTTOM
+			}
+		}
+		return HTCLIENT
+	case WM_SIZE:
+		w := int32(uint32(lParam) & 0xffff)
+		h := int32(uint32(lParam) >> 16)
+		if w >= minWidth {
+			windowWidth = w
+		}
+		if h > 0 {
+			windowHeight = h
+		}
+		return 0
 	case WM_ERASEBKGND:
 		return 1
 	case WM_PAINT:
@@ -424,7 +466,7 @@ func wndProc(hwnd uintptr, msg uint32, wParam, lParam uintptr) uintptr {
 			resizeAndRepaint(hwnd)
 			return 0
 		}
-		if y < headerHeight && x > baseWidth-48 {
+		if y < headerHeight && x > windowWidth-48 {
 			procDestroyWindow.Call(hwnd)
 			return 0
 		}
@@ -434,6 +476,11 @@ func wndProc(hwnd uintptr, msg uint32, wParam, lParam uintptr) uintptr {
 		if settingsOpen && handleSettingsClick(hwnd, x, y) {
 			return 0
 		}
+		if y >= headerHeight && y < headerHeight+columnsHeight {
+			setSortColumn(x)
+			resizeAndRepaint(hwnd)
+			return 0
+		}
 		if y < headerHeight {
 			procReleaseCapture.Call()
 			procSendMessageW.Call(hwnd, 0x00A1 /*WM_NCLBUTTONDOWN*/, HTCAPTION, 0)
@@ -441,6 +488,14 @@ func wndProc(hwnd uintptr, msg uint32, wParam, lParam uintptr) uintptr {
 		}
 	case WM_EXITSIZEMOVE:
 		saveWindowPosition(hwnd)
+		return 0
+	case WM_MOUSEWHEEL:
+		if int16((wParam>>16)&0xffff) > 0 {
+			scrollRows(-3)
+		} else {
+			scrollRows(3)
+		}
+		resizeAndRepaint(hwnd)
 		return 0
 	case WM_APP_REFRESH:
 		atomic.StoreInt32(&refreshPending, 0)
@@ -461,25 +516,33 @@ func wndProc(hwnd uintptr, msg uint32, wParam, lParam uintptr) uintptr {
 func desiredHeight() int32 {
 	state.RLock()
 	settingsOpen := state.SettingsOpen
+	rowCount := len(state.Order)
 	state.RUnlock()
+	var natural int32
 	if settingsOpen {
-		return headerHeight + 300
+		natural = headerHeight + 360
+	} else {
+		body := int32(rowCount) * rowHeight
+		maxBody := maxTableRows * rowHeight
+		if body > maxBody {
+			body = maxBody
+		}
+		if body < minBodyHeight {
+			body = minBodyHeight
+		}
+		natural = headerHeight + columnsHeight + body + footerHeight
 	}
-	state.RLock()
-	n := len(state.Order)
-	state.RUnlock()
-	body := int32(n) * rowHeight
-	if body < minBodyHeight {
-		body = minBodyHeight
+	if windowHeight > natural {
+		return windowHeight
 	}
-	return headerHeight + columnsHeight + body + footerHeight
+	return natural
 }
 
 func resizeAndRepaint(hwnd uintptr) {
 	h := desiredHeight()
 	if h != lastWindowHeight {
-		procSetWindowPos.Call(hwnd, 0, 0, 0, uintptr(baseWidth), uintptr(h), SWP_NOMOVE|SWP_NOZORDER|SWP_NOACTIVATE)
-		applyRoundedRegion(hwnd, baseWidth, h)
+		procSetWindowPos.Call(hwnd, 0, 0, 0, uintptr(windowWidth), uintptr(h), SWP_NOMOVE|SWP_NOZORDER|SWP_NOACTIVATE)
+		applyRoundedRegion(hwnd, windowWidth, h)
 		lastWindowHeight = h
 	}
 	procInvalidateRect.Call(hwnd, 0, 1)
@@ -538,6 +601,148 @@ func notifyRefresh() {
 	}
 }
 
+func compareInt64(a, b int64) int {
+	if a < b {
+		return -1
+	}
+	if a > b {
+		return 1
+	}
+	return 0
+}
+
+func compareFloat64(a, b float64) int {
+	if a < b {
+		return -1
+	}
+	if a > b {
+		return 1
+	}
+	return 0
+}
+
+func rankOrder(rank string) int {
+	switch strings.ToLower(strings.TrimSpace(rank)) {
+	case "champion":
+		return 4
+	case "titan":
+		return 3
+	case "elite":
+		return 2
+	case "vip":
+		return 1
+	default:
+		return 0
+	}
+}
+
+func comparePlayersByColumn(a, b *PlayerStats, column string) int {
+	switch column {
+	case "player":
+		al, bl := strings.ToLower(a.Username), strings.ToLower(b.Username)
+		if al < bl {
+			return -1
+		}
+		if al > bl {
+			return 1
+		}
+	case "rank":
+		return compareInt64(int64(rankOrder(a.GamesRank)), int64(rankOrder(b.GamesRank)))
+	case "level":
+		return compareInt64(a.Level, b.Level)
+	case "fkdr":
+		if a.Infinite != b.Infinite {
+			if a.Infinite {
+				return 1
+			}
+			return -1
+		}
+		return compareFloat64(a.FKDR, b.FKDR)
+	case "kills":
+		return compareInt64(a.Kills, b.Kills)
+	case "finals":
+		return compareInt64(a.FinalKills, b.FinalKills)
+	case "beds":
+		return compareInt64(a.Beds, b.Beds)
+	case "wins":
+		return compareInt64(a.Wins, b.Wins)
+	}
+	return 0
+}
+
+func sortHeader(label, key string) string {
+	state.RLock()
+	active, desc := state.SortBy == key, state.SortDesc
+	state.RUnlock()
+	if !active {
+		return label
+	}
+	if desc {
+		return label + " DESC"
+	}
+	return label + " ASC"
+}
+
+func headerColor(key string) uintptr {
+	state.RLock()
+	active := state.SortBy == key
+	state.RUnlock()
+	if active {
+		return rgb(224, 184, 76)
+	}
+	return rgb(141, 151, 168)
+}
+
+func setSortColumn(x int32) {
+	key := ""
+	switch {
+	case x >= 20 && x < 260:
+		key = "player"
+	case x >= 260 && x < 350:
+		key = "rank"
+	case x >= 350 && x < 407:
+		key = "level"
+	case x >= 407 && x < 480:
+		key = "fkdr"
+	case x >= 480 && x < 575:
+		key = "kills"
+	case x >= 575 && x < 675:
+		key = "finals"
+	case x >= 675 && x < 765:
+		key = "beds"
+	case x >= 765:
+		key = "wins"
+	}
+	if key == "" {
+		return
+	}
+	state.Lock()
+	if state.SortBy == key {
+		state.SortDesc = !state.SortDesc
+	} else {
+		state.SortBy = key
+		state.SortDesc = true
+	}
+	state.Scroll = 0
+	state.Unlock()
+}
+
+func scrollRows(delta int) {
+	state.Lock()
+	maxStart := len(state.Order) - int(maxTableRows)
+	if maxStart < 0 {
+		maxStart = 0
+	}
+	state.Scroll += delta
+	if state.Scroll < 0 {
+		state.Scroll = 0
+	}
+	if state.Scroll > maxStart {
+		state.Scroll = maxStart
+	}
+	state.Unlock()
+}
+
 func paint(hwnd uintptr) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -558,6 +763,9 @@ func paint(hwnd uintptr) {
 	live := state.GameLive
 	status := state.Status
 	logPath := state.LogPath
+	sortBy := state.SortBy
+	sortDesc := state.SortDesc
+	scroll := state.Scroll
 	rows := make([]*PlayerStats, 0, len(state.Order))
 	for _, k := range state.Order {
 		if p := state.Players[k]; p != nil {
@@ -580,8 +788,18 @@ func paint(hwnd uintptr) {
 			return strings.ToLower(a.Username) < strings.ToLower(b.Username)
 		}
 
+		if sortBy != "auto" {
+			if c := comparePlayersByColumn(a, b, sortBy); c != 0 {
+				if sortDesc {
+					return c > 0
+				}
+				return c < 0
+			}
+			return strings.ToLower(a.Username) < strings.ToLower(b.Username)
+		}
+
 		// Automatic strongest-to-weakest ranking. It considers every visible
-		// stat instead of making the user click a sort column each queue.
+		// stat until the user chooses a specific column.
 		ad, bd := isDangerous(a), isDangerous(b)
 		if ad != bd {
 			return ad
@@ -616,8 +834,8 @@ func paint(hwnd uintptr) {
 	})
 
 	h := desiredHeight()
-	drawRoundBox(hdc, 0, 0, baseWidth, h, 14, rgb(17, 20, 27), rgb(55, 63, 78))
-	drawRoundBox(hdc, 1, 1, baseWidth-1, headerHeight, 14, rgb(23, 27, 36), rgb(23, 27, 36))
+	drawRoundBox(hdc, 0, 0, windowWidth, h, 14, rgb(17, 20, 27), rgb(55, 63, 78))
+	drawRoundBox(hdc, 1, 1, windowWidth-1, headerHeight, 14, rgb(23, 27, 36), rgb(23, 27, 36))
 
 	titleFont := makeFont(20, FW_BOLD)
 	bodyFont := makeFont(15, FW_NORMAL)
@@ -630,7 +848,7 @@ func paint(hwnd uintptr) {
 
 	text(hdc, titleFont, 20, 12, "PikaStats Overlay", rgb(239, 242, 248))
 	text(hdc, smallFont, 21, 36, "Shortcut: "+toggleKeyLabel()+"   •   -stats Player", rgb(139, 149, 166))
-	text(hdc, semiFont, baseWidth-32, 18, "×", rgb(184, 192, 205))
+	text(hdc, semiFont, windowWidth-32, 18, "×", rgb(184, 192, 205))
 	drawRoundBox(hdc, 220, 28, 305, 51, 10, rgb(39, 46, 59), rgb(77, 88, 108))
 	text(hdc, smallFont, 234, 33, "Settings", rgb(213, 220, 232))
 	if settingsOpen {
@@ -653,36 +871,36 @@ func paint(hwnd uintptr) {
 		chipColor = rgb(196, 109, 116)
 	}
 	chipW := int32(len(chip)*8 + 22)
-	drawRoundBox(hdc, baseWidth-chipW-58, 17, baseWidth-58, 41, 12, blend(chipColor, rgb(17, 20, 27), 35), chipColor)
-	text(hdc, smallFont, baseWidth-chipW-47, 22, chip, chipColor)
+	drawRoundBox(hdc, windowWidth-chipW-58, 17, windowWidth-58, 41, 12, blend(chipColor, rgb(17, 20, 27), 35), chipColor)
+	text(hdc, smallFont, windowWidth-chipW-47, 22, chip, chipColor)
 
 	y := headerHeight
-	fillRect(hdc, 0, y, baseWidth, y+columnsHeight, rgb(20, 23, 31))
-	text(hdc, smallFont, 20, y+8, "PLAYER", rgb(141, 151, 168))
-	text(hdc, smallFont, 260, y+8, "RANK", rgb(141, 151, 168))
+	fillRect(hdc, 0, y, windowWidth, y+columnsHeight, rgb(20, 23, 31))
+	text(hdc, smallFont, 20, y+8, sortHeader("PLAYER", "player"), headerColor("player"))
+	text(hdc, smallFont, 260, y+8, sortHeader("RANK", "rank"), headerColor("rank"))
 	if showLevel {
-		text(hdc, smallFont, 350, y+8, "LVL", rgb(141, 151, 168))
+		text(hdc, smallFont, 350, y+8, sortHeader("LVL", "level"), headerColor("level"))
 	}
 	if showFKDR {
-		text(hdc, smallFont, 407, y+8, "FKDR", rgb(141, 151, 168))
+		text(hdc, smallFont, 407, y+8, sortHeader("FKDR", "fkdr"), headerColor("fkdr"))
 	}
 	if showKills {
-		text(hdc, smallFont, 480, y+8, "KILLS", rgb(141, 151, 168))
+		text(hdc, smallFont, 480, y+8, sortHeader("KILLS", "kills"), headerColor("kills"))
 	}
 	if showFinals {
-		text(hdc, smallFont, 575, y+8, "FINALS", rgb(141, 151, 168))
+		text(hdc, smallFont, 575, y+8, sortHeader("FINALS", "finals"), headerColor("finals"))
 	}
 	if showBeds {
-		text(hdc, smallFont, 675, y+8, "BEDS", rgb(141, 151, 168))
+		text(hdc, smallFont, 675, y+8, sortHeader("BEDS", "beds"), headerColor("beds"))
 	}
 	if showWins {
-		text(hdc, smallFont, 765, y+8, "WINS", rgb(141, 151, 168))
+		text(hdc, smallFont, 765, y+8, sortHeader("WINS", "wins"), headerColor("wins"))
 	}
 
 	y += columnsHeight
 	if len(rows) == 0 {
 		msg := "Waiting for BedWars players..."
-		sub := "Open chat with T or /, type one space, then press TAB. Player names are read from Lunar's active log."
+		sub := "Open chat, type one space, then press TAB. Player names are read from Lunar's active log."
 		if !pika {
 			msg = "Waiting for PikaNetwork..."
 			sub = "Join PikaNetwork, then use T → Space → TAB in the BedWars queue."
@@ -690,14 +908,27 @@ func paint(hwnd uintptr) {
 		text(hdc, bodyFont, 20, y+18, msg, rgb(224, 229, 238))
 		text(hdc, smallFont, 20, y+43, sub, rgb(132, 142, 158))
 	} else {
-		for i, p := range rows {
-			ry := y + int32(i)*rowHeight
+		start := scroll
+		maxStart := len(rows) - int(maxTableRows)
+		if maxStart < 0 {
+			maxStart = 0
+		}
+		if start < 0 {
+			start = 0
+		}
+		if start > maxStart {
+			start = maxStart
+		}
+		for i := start; i < len(rows); i++ {
+			visualIndex := i - start
+			ry := y + int32(visualIndex)*rowHeight
+			p := rows[i]
 			if isDangerous(p) {
-				fillRect(hdc, 8, ry, baseWidth-8, ry+rowHeight, rgb(45, 24, 31))
+				fillRect(hdc, 8, ry, windowWidth-8, ry+rowHeight, rgb(45, 24, 31))
 			} else if isLikelyAlt(p) {
-				fillRect(hdc, 8, ry, baseWidth-8, ry+rowHeight, rgb(42, 33, 20))
-			} else if i%2 == 1 {
-				fillRect(hdc, 8, ry, baseWidth-8, ry+rowHeight, rgb(19, 22, 29))
+				fillRect(hdc, 8, ry, windowWidth-8, ry+rowHeight, rgb(42, 33, 20))
+			} else if visualIndex%2 == 1 {
+				fillRect(hdc, 8, ry, windowWidth-8, ry+rowHeight, rgb(19, 22, 29))
 			}
 			name := p.Username
 			nameColor := rgb(231, 235, 242)
@@ -761,13 +992,31 @@ func paint(hwnd uintptr) {
 	}
 
 	fy := h - footerHeight
-	line(hdc, 12, fy, baseWidth-12, fy, rgb(46, 53, 66))
+	if len(rows) > int(maxTableRows) {
+		bodyTop := headerHeight + columnsHeight
+		fillRect(hdc, windowWidth-7, bodyTop+2, windowWidth-3, fy-2, rgb(34, 39, 49))
+		trackHeight := fy - bodyTop - 4
+		thumbHeight := trackHeight * int32(maxTableRows) / int32(len(rows))
+		if thumbHeight < 18 {
+			thumbHeight = 18
+		}
+		maxStart := len(rows) - int(maxTableRows)
+		if maxStart < 1 {
+			maxStart = 1
+		}
+		thumbTop := bodyTop + 2 + (trackHeight-thumbHeight)*int32(scroll)/int32(maxStart)
+		fillRect(hdc, windowWidth-7, thumbTop, windowWidth-3, thumbTop+thumbHeight, rgb(101, 116, 141))
+	}
+	line(hdc, 12, fy, windowWidth-12, fy, rgb(46, 53, 66))
 	foot := status
 	if len(foot) > 76 {
 		foot = foot[:73] + "..."
 	}
 	if pika && len(rows) > 0 {
-		foot = fmt.Sprintf("%d player%s • BedWars %s / %s • Top 100 ranks are bold and coloured", len(rows), plural(len(rows)), leaderboardIntervalLabel(), leaderboardModeLabel())
+		foot = fmt.Sprintf("%d player%s • BedWars %s / %s • click a header to sort", len(rows), plural(len(rows)), leaderboardIntervalLabel(), leaderboardModeLabel())
+	}
+	if len(rows) > int(maxTableRows) {
+		foot += " • mouse wheel scrolls"
 	}
 	if logPath != "" && !pika {
 		foot = "Lunar log found • waiting for PikaNetwork"
@@ -777,7 +1026,7 @@ func paint(hwnd uintptr) {
 
 func paintSettings(hdc, bodyFont, smallFont, semiFont uintptr) {
 	y := headerHeight
-	fillRect(hdc, 0, y, baseWidth, y+300, rgb(20, 23, 31))
+	fillRect(hdc, 0, y, windowWidth, y+360, rgb(20, 23, 31))
 	text(hdc, bodyFont, 20, y+18, "Overlay settings", rgb(239, 242, 248))
 	text(hdc, smallFont, 20, y+45, "Click a stat to show or hide its column", rgb(139, 149, 166))
 	drawSettingToggle(hdc, semiFont, 20, y+70, "Level", showLevel)
@@ -803,6 +1052,8 @@ func paintSettings(hdc, bodyFont, smallFont, semiFont uintptr) {
 	text(hdc, smallFont, 20, y+260, shortcutText, rgb(139, 149, 166))
 	drawRoundBox(hdc, 20, y+272, 205, y+296, 10, rgb(39, 46, 59), rgb(77, 88, 108))
 	text(hdc, semiFont, 34, y+278, "Set custom shortcut", rgb(231, 235, 242))
+	text(hdc, smallFont, 20, y+315, "Fuzzy leaderboard data (large ranks become #12k+)", rgb(139, 149, 166))
+	drawSettingToggle(hdc, semiFont, 20, y+333, "Fuzzy LB data", fuzzyLB)
 }
 
 func drawSettingToggle(hdc, font uintptr, x, y int32, label string, enabled bool) {
@@ -857,6 +1108,8 @@ func handleSettingsClick(hwnd uintptr, x, y int32) bool {
 		}
 	} else if rel >= 265 && rel < 300 && x < 210 {
 		atomic.StoreInt32(&shortcutCapturing, 1)
+	} else if rel >= 320 && rel < 360 && x < 220 {
+		fuzzyLB = !fuzzyLB
 	} else {
 		return false
 	}
@@ -1175,6 +1428,8 @@ func leaderboardPlaceColor(place int64) uintptr {
 		return rgb(227, 112, 59)
 	case place <= 50:
 		return statOrange
+	case place <= 100:
+		return rgb(224, 184, 76) // #51-#100
 	default:
 		return statGray
 	}
@@ -1200,8 +1455,18 @@ func drawStatWithLeaderboardPlace(hdc, valueFont, placeFont uintptr, x, y int32,
 	text(hdc, valueFont, x, y+10, valueText, valueColor)
 	if place > 0 {
 		// The placement remains on the same row as the stat: "9,999 #2".
-		text(hdc, placeFont, x+int32(len(valueText)*8+5), y+11, fmt.Sprintf("#%d", place), leaderboardPlaceColor(place))
+		text(hdc, placeFont, x+int32(len(valueText)*8+5), y+11, formatLeaderboardPlace(place), leaderboardPlaceColor(place))
 	}
+}
+
+func formatLeaderboardPlace(place int64) string {
+	if place <= 0 {
+		return ""
+	}
+	if !fuzzyLB || place <= 1000 {
+		return fmt.Sprintf("#%d", place)
+	}
+	return fmt.Sprintf("#%dk+", place/1000)
 }
 
 func leaderboardIntervalLabel() string {
@@ -1537,10 +1802,24 @@ func watchToggleKey() {
 
 func watchTabKey() {
 	wasDown := false
+	spaceWasDown := false
+	lastSpaceAt := time.Time{}
 	for {
+		spaceState, _, _ := procGetAsyncKeyState.Call(VK_SPACE)
+		spaceDown := int16(spaceState&0xffff) < 0
+		if spaceDown && !spaceWasDown {
+			lastSpaceAt = time.Now()
+		}
+		spaceWasDown = spaceDown
 		r, _, _ := procGetAsyncKeyState.Call(VK_TAB)
 		down := int16(r&0xffff) < 0
 		if down && !wasDown {
+			if time.Since(lastSpaceAt) > 3*time.Second {
+				debugf("TAB ignored: no recent Space arm")
+				wasDown = down
+				time.Sleep(18 * time.Millisecond)
+				continue
+			}
 			now := time.Now()
 			debugf("TAB pressed; clearing old roster and waiting for a fresh Badlion completion line")
 			state.Lock()
@@ -2092,6 +2371,7 @@ func clearPlayers() {
 	state.Players = make(map[string]*PlayerStats)
 	state.Order = nil
 	state.GameLive = false
+	state.Scroll = 0
 	state.Unlock()
 	notifyRefresh()
 }
@@ -2158,6 +2438,7 @@ func setRoster(names []string) {
 	state.Order = out
 	state.BedWars = true
 	state.Status = fmt.Sprintf("TAB roster captured: %d players • fetching stats", len(clean))
+	state.Scroll = 0
 	state.Unlock()
 	for _, n := range clean {
 		queueStats(n)
@@ -2675,6 +2956,8 @@ func configPath() string {
 type config struct {
 	X                   int32  `json:"x"`
 	Y                   int32  `json:"y"`
+	Width               int32  `json:"width"`
+	Height              int32  `json:"height"`
 	LeaderboardInterval string `json:"leaderboardInterval"`
 	LeaderboardMode     string `json:"leaderboardMode"`
 	ShowLevel           bool   `json:"showLevel"`
@@ -2684,6 +2967,7 @@ type config struct {
 	ShowBeds            bool   `json:"showBeds"`
 	ShowWins            bool   `json:"showWins"`
 	ToggleKey           uint16 `json:"toggleKey"`
+	FuzzyLB             bool   `json:"fuzzyLB"`
 	SettingsVersion     int    `json:"settingsVersion"`
 }
 
@@ -2695,12 +2979,21 @@ func init() {
 		if json.Unmarshal(b, &c) == nil {
 			state.X = c.X
 			state.Y = c.Y
+			if c.Width >= minWidth {
+				windowWidth = c.Width
+			}
+			if c.Height > 0 {
+				windowHeight = c.Height
+			}
 			leaderboardInterval = normalizeLeaderboardInterval(c.LeaderboardInterval)
 			leaderboardMode = normalizeLeaderboardMode(c.LeaderboardMode)
 			if c.SettingsVersion >= 1 {
 				showLevel, showFKDR, showKills, showFinals, showBeds, showWins = c.ShowLevel, c.ShowFKDR, c.ShowKills, c.ShowFinals, c.ShowBeds, c.ShowWins
 				if c.ToggleKey != 0 {
 					atomic.StoreUint32(&toggleKeyCode, uint32(c.ToggleKey))
+				}
+				if c.SettingsVersion >= 2 {
+					fuzzyLB = c.FuzzyLB
 				}
 			}
 		}
@@ -2715,6 +3008,8 @@ func saveWindowPosition(hwnd uintptr) {
 		state.Unlock()
 		p := configPath()
 		_ = os.MkdirAll(filepath.Dir(p), 0755)
+		windowWidth = r.Right - r.Left
+		windowHeight = r.Bottom - r.Top
 		saveConfigAt(r.Left, r.Top)
 	}
 }
@@ -2723,10 +3018,10 @@ func saveConfigAt(x, y int32) {
 	p := configPath()
 	_ = os.MkdirAll(filepath.Dir(p), 0755)
 	b, _ := json.MarshalIndent(config{
-		X: x, Y: y,
+		X: x, Y: y, Width: windowWidth, Height: windowHeight,
 		LeaderboardInterval: leaderboardInterval,
 		LeaderboardMode:     leaderboardMode,
-		ShowLevel:           showLevel, ShowFKDR: showFKDR, ShowKills: showKills, ShowFinals: showFinals, ShowBeds: showBeds, ShowWins: showWins, ToggleKey: uint16(atomic.LoadUint32(&toggleKeyCode)), SettingsVersion: 1,
+		ShowLevel:           showLevel, ShowFKDR: showFKDR, ShowKills: showKills, ShowFinals: showFinals, ShowBeds: showBeds, ShowWins: showWins, ToggleKey: uint16(atomic.LoadUint32(&toggleKeyCode)), FuzzyLB: fuzzyLB, SettingsVersion: 2,
 	}, "", "  ")
 	_ = os.WriteFile(p, b, 0644)
 }

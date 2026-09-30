@@ -10,15 +10,17 @@ It reads Minecraft/Lunar log output to detect the current TAB roster, fetches pu
 
 - Detects BedWars players from the Minecraft/Lunar TAB-completion roster
 - Shows:
-  - Minigames-only Pika rank badge (for example `[Titan]`); other gamemode ranks are ignored
+  - A separate minigames-only Pika rank column (`Champion`, `Titan`, `Elite`, or `VIP`); other gamemode ranks are ignored
   - Level
   - FKDR
   - Kills
   - Final Kills
   - Beds Destroyed
   - Wins
-- Shows a bold, colour-coded global leaderboard place beside a stat when the player is in the **Top 100** for the selected BedWars mode and interval
-- Automatically ranks the strongest / most threatening players toward the top
+- Shows the global leaderboard place beside Kills, Final Kills, Beds, and Wins whenever the API returns one, including places above #100
+- Makes large places compact when fuzzy leaderboard data is enabled (`#1001` becomes `#1k+`)
+- Clickable column sorting with DESC/ASC toggling, including Champion > Titan > Elite > VIP rank order
+- A bounded, scrollable player list with draggable right/bottom edges for resizing
 - Stat-based colors
 - `[!]` threat highlighting
 - `[ALT]` suspicious-stat-mismatch heuristic
@@ -39,11 +41,11 @@ It reads Minecraft/Lunar log output to detect the current TAB roster, fetches pu
 
 ## Installation
 
-1. Download `PikaStatsOverlay-3.6.2.exe`.
+1. Download `PikaStatsOverlay-3.11.0.exe`.
 2. Run the EXE.
 3. Start Lunar Client and join PikaNetwork BedWars.
 4. In the BedWars waiting queue:
-   - Press `T`
+   - Focus the Minecraft chat input using your normal chat key
    - Type one space
    - Press `TAB`
    - Press `Esc`
@@ -58,11 +60,12 @@ Click **Settings** in the overlay header to open the in-app settings screen. Cha
 - Show or hide: Level, FKDR, Kills, Final Kills, Beds, and Wins.
 - Choose leaderboard interval: Lifetime, Monthly, or Weekly.
 - Choose leaderboard mode: All Modes, Solo, Doubles, Triples, or Quads.
-- Change the global show/hide shortcut: `X`, `F8`, `F9`, or `F10`.
+- Change the global show/hide shortcut by clicking **Set custom shortcut** and pressing the key you want.
+- Toggle **Fuzzy LB data**. It is enabled by default; places through `#1000` stay exact and larger places use the `#12k+` form.
 
 ## Leaderboard places and settings
 
-The overlay shows a player's global place (`#1` through `#100`) immediately after **Kills**, **Final Kills**, **Beds**, and **Wins** when the player is in the Top 100 for that statistic, for example `9,999 #2`.
+The overlay shows a player's global place immediately after **Kills**, **Final Kills**, **Beds**, and **Wins**, for example `9,999 #2`. The numeric place is retained even when it is outside the Top 100. With fuzzy data enabled, `#1001` is displayed as `#1k+`, while `#1` through `#1000` remain exact.
 
 - `#1` is deep purple.
 - `#2–#3` are bold dark red.
@@ -70,6 +73,7 @@ The overlay shows a player's global place (`#1` through `#100`) immediately afte
 - `#11–#25` are orange-red.
 - `#26–#50` are orange.
 - `#51–#100` are gold.
+- Places after `#100` stay visible; places outside the danger ladder use the neutral leaderboard color.
 
 The default leaderboard selection is **Lifetime / All Modes**. It uses Pika's `total` interval, displayed in the overlay as **Lifetime**.
 
@@ -141,7 +145,7 @@ For example, an account with roughly **8–10+ FKDR** but only a few hundred win
 
 ## Automatic Ranking
 
-The table automatically ranks players strongest → weakest.
+The table automatically ranks players strongest → weakest until a header is clicked. Click a header once for descending order, then click it again for ascending order. Clickable columns are Player, Rank, Level, FKDR, Kills, Finals, Beds, and Wins. Scrolling is available when more than 12 players are shown.
 
 The ranking considers:
 
@@ -153,7 +157,7 @@ The ranking considers:
 - `[!]` threat status
 - `[ALT]` status
 
-You do not need to manually click a stat column to sort the table.
+The chosen sort is for the current overlay session; a new TAB roster starts at the top of the list.
 
 ## `-stats` Chat Command
 
