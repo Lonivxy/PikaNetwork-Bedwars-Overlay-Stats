@@ -30,7 +30,7 @@ const (
 	appName        = "PikaStats Overlay"
 	appVersion     = "3.10.2"
 	windowClass    = "PikaStatsOverlayWindowClass"
-	baseWidth      = int32(790)
+	baseWidth      = int32(860)
 	headerHeight   = int32(58)
 	columnsHeight  = int32(30)
 	rowHeight      = int32(36)
@@ -659,23 +659,24 @@ func paint(hwnd uintptr) {
 	y := headerHeight
 	fillRect(hdc, 0, y, baseWidth, y+columnsHeight, rgb(20, 23, 31))
 	text(hdc, smallFont, 20, y+8, "PLAYER", rgb(141, 151, 168))
+	text(hdc, smallFont, 260, y+8, "RANK", rgb(141, 151, 168))
 	if showLevel {
-		text(hdc, smallFont, 310, y+8, "LVL", rgb(141, 151, 168))
+		text(hdc, smallFont, 350, y+8, "LVL", rgb(141, 151, 168))
 	}
 	if showFKDR {
-		text(hdc, smallFont, 367, y+8, "FKDR", rgb(141, 151, 168))
+		text(hdc, smallFont, 407, y+8, "FKDR", rgb(141, 151, 168))
 	}
 	if showKills {
-		text(hdc, smallFont, 440, y+8, "KILLS", rgb(141, 151, 168))
+		text(hdc, smallFont, 480, y+8, "KILLS", rgb(141, 151, 168))
 	}
 	if showFinals {
-		text(hdc, smallFont, 525, y+8, "FINALS", rgb(141, 151, 168))
+		text(hdc, smallFont, 575, y+8, "FINALS", rgb(141, 151, 168))
 	}
 	if showBeds {
-		text(hdc, smallFont, 620, y+8, "BEDS", rgb(141, 151, 168))
+		text(hdc, smallFont, 675, y+8, "BEDS", rgb(141, 151, 168))
 	}
 	if showWins {
-		text(hdc, smallFont, 705, y+8, "WINS", rgb(141, 151, 168))
+		text(hdc, smallFont, 765, y+8, "WINS", rgb(141, 151, 168))
 	}
 
 	y += columnsHeight
@@ -700,9 +701,6 @@ func paint(hwnd uintptr) {
 			}
 			name := p.Username
 			nameColor := rgb(231, 235, 242)
-			if p.GamesRank != "" {
-				name += " [" + p.GamesRank + "]"
-			}
 			if isDangerous(p) {
 				name += "  [!]"
 				nameColor = statRed
@@ -720,6 +718,9 @@ func paint(hwnd uintptr) {
 				drawAvatar(hdc, 18, ry+5, 26, 26, av)
 			}
 			text(hdc, semiFont, 52, ry+11, name, nameColor)
+			if p.GamesRank != "" {
+				text(hdc, semiFont, 260, ry+11, p.GamesRank, gamesRankColor(p.GamesRank))
+			}
 			if p.State == "loading" {
 				text(hdc, smallFont, 310, ry+12, "Loading...", rgb(126, 143, 170))
 				continue
@@ -733,7 +734,7 @@ func paint(hwnd uintptr) {
 				continue
 			}
 			if showLevel {
-				text(hdc, bodyFont, 310, ry+10, fmt.Sprintf("%d", p.Level), levelColor(p.Level))
+				text(hdc, bodyFont, 350, ry+10, fmt.Sprintf("%d", p.Level), levelColor(p.Level))
 			}
 			fk := "0.00"
 			if p.Infinite {
@@ -742,19 +743,19 @@ func paint(hwnd uintptr) {
 				fk = fmt.Sprintf("%.2f", p.FKDR)
 			}
 			if showFKDR {
-				text(hdc, bodyFont, 367, ry+10, fk, fkdrColor(p.FKDR, p.Infinite))
+				text(hdc, bodyFont, 407, ry+10, fk, fkdrColor(p.FKDR, p.Infinite))
 			}
 			if showKills {
-				drawStatWithLeaderboardPlace(hdc, bodyFont, semiFont, 440, ry, p.Kills, statGray, p.KillsPlace)
+				drawStatWithLeaderboardPlace(hdc, bodyFont, semiFont, 480, ry, p.Kills, statGray, p.KillsPlace)
 			}
 			if showFinals {
-				drawStatWithLeaderboardPlace(hdc, bodyFont, semiFont, 525, ry, p.FinalKills, finalsColor(p.FinalKills), p.FinalsPlace)
+				drawStatWithLeaderboardPlace(hdc, bodyFont, semiFont, 575, ry, p.FinalKills, finalsColor(p.FinalKills), p.FinalsPlace)
 			}
 			if showBeds {
-				drawStatWithLeaderboardPlace(hdc, bodyFont, semiFont, 620, ry, p.Beds, bedsColor(p.Beds), p.BedsPlace)
+				drawStatWithLeaderboardPlace(hdc, bodyFont, semiFont, 675, ry, p.Beds, bedsColor(p.Beds), p.BedsPlace)
 			}
 			if showWins {
-				drawStatWithLeaderboardPlace(hdc, bodyFont, semiFont, 705, ry, p.Wins, winsColor(p.Wins), p.WinsPlace)
+				drawStatWithLeaderboardPlace(hdc, bodyFont, semiFont, 765, ry, p.Wins, winsColor(p.Wins), p.WinsPlace)
 			}
 		}
 	}
@@ -1175,14 +1176,29 @@ func leaderboardPlaceColor(place int64) uintptr {
 	case place <= 50:
 		return statOrange
 	default:
-		return rgb(231, 196, 82) // #51-#100
+		return statGray
+	}
+}
+
+func gamesRankColor(rank string) uintptr {
+	switch strings.ToLower(strings.TrimSpace(rank)) {
+	case "champion":
+		return statRed
+	case "titan":
+		return rgb(231, 196, 82)
+	case "elite":
+		return rgb(104, 202, 239)
+	case "vip":
+		return statGreen
+	default:
+		return rgb(218, 223, 232)
 	}
 }
 
 func drawStatWithLeaderboardPlace(hdc, valueFont, placeFont uintptr, x, y int32, value int64, valueColor uintptr, place int64) {
 	valueText := comma(value)
 	text(hdc, valueFont, x, y+10, valueText, valueColor)
-	if place > 0 && place <= 100 {
+	if place > 0 {
 		// The placement remains on the same row as the stat: "9,999 #2".
 		text(hdc, placeFont, x+int32(len(valueText)*8+5), y+11, fmt.Sprintf("#%d", place), leaderboardPlaceColor(place))
 	}
