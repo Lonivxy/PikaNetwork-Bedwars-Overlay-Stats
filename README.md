@@ -10,11 +10,14 @@ It reads Minecraft/Lunar log output to detect the current TAB roster, fetches pu
 
 - Detects BedWars players from the Minecraft/Lunar TAB-completion roster
 - Shows:
+  - Minigames-only Pika rank badge (for example `[Titan]`); other gamemode ranks are ignored
   - Level
   - FKDR
+  - Kills
   - Final Kills
   - Beds Destroyed
   - Wins
+- Shows a bold, colour-coded global leaderboard place beside a stat when the player is in the **Top 100** for the selected BedWars mode and interval
 - Automatically ranks the strongest / most threatening players toward the top
 - Stat-based colors
 - `[!]` threat highlighting
@@ -47,6 +50,39 @@ It reads Minecraft/Lunar log output to detect the current TAB roster, fetches pu
 5. The detected players and their stats should populate in the overlay.
 
 Press **X** to show or hide the overlay.
+
+## Leaderboard places and settings
+
+The overlay shows a player's global place (`#1` through `#100`) below **Kills**, **Final Kills**, **Beds**, and **Wins** when the player is in the Top 100 for that statistic.
+
+- `#1` is deep purple.
+- `#2–#3` are bold dark red.
+- `#4–#10` are red.
+- `#11–#25` are orange-red.
+- `#26–#50` are orange.
+- `#51–#100` are gold.
+
+The default leaderboard selection is **Lifetime / All Modes**. It uses Pika's `total` interval, displayed in the overlay as **Lifetime**.
+
+After running and closing the program once, edit this file while the overlay is closed to change the selection:
+
+```text
+%APPDATA%\PikaStatsOverlay\config.json
+```
+
+```json
+{
+  "leaderboardInterval": "total",
+  "leaderboardMode": "ALL_MODES"
+}
+```
+
+Supported values are:
+
+- `leaderboardInterval`: `total` (Lifetime), `monthly`, or `weekly`
+- `leaderboardMode`: `ALL_MODES`, `SOLO`, `DOUBLES`, `TRIPLES`, or `QUADS`
+
+Only **BedWars** leaderboard placements are used. The overlay deliberately does not scan SkyPvP, Practice, Prison, Survival, or other non-minigame modes.
 
 ## Stat Colors
 

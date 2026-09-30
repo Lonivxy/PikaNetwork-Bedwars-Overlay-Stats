@@ -28,12 +28,12 @@ import (
 
 const (
 	appName        = "PikaStats Overlay"
-	appVersion     = "3.6.2"
+	appVersion     = "3.10.2"
 	windowClass    = "PikaStatsOverlayWindowClass"
-	baseWidth      = int32(650)
+	baseWidth      = int32(790)
 	headerHeight   = int32(58)
 	columnsHeight  = int32(30)
-	rowHeight      = int32(36)
+	rowHeight      = int32(54)
 	footerHeight   = int32(28)
 	minBodyHeight  = int32(64)
 	maxPlayers     = 32
@@ -214,7 +214,9 @@ type KEYBDINPUT struct {
 
 type PlayerStats struct {
 	Username    string
+	GamesRank   string
 	Level       int64
+	Kills       int64
 	FinalKills  int64
 	FinalDeaths int64
 	Beds        int64
@@ -223,6 +225,10 @@ type PlayerStats struct {
 	Losses      int64
 	FKDR        float64
 	Infinite    bool
+	KillsPlace  int64
+	FinalsPlace int64
+	BedsPlace   int64
+	WinsPlace   int64
 	State       string // loading, ok, unavailable, api
 	Updated     time.Time
 }
@@ -251,6 +257,8 @@ type logCursor struct {
 }
 
 var state = AppState{Players: make(map[string]*PlayerStats), Status: "Waiting for Lunar Client...", X: -1, Y: 72, SortBy: "auto"}
+var leaderboardInterval = "total"
+var leaderboardMode = "ALL_MODES"
 var refreshPending int32
 var requestQueue = make(chan string, 64)
 var queuedMu sync.Mutex
@@ -589,7 +597,7 @@ func paint(hwnd uintptr) {
 	defer del(semiFont)
 
 	text(hdc, titleFont, 20, 12, "PikaStats Overlay", rgb(239, 242, 248))
-	text(hdc, smallFont, 21, 36, "X show / hide   •   AUTO strongest → weakest   •   -stats Player", rgb(139, 149, 166))
+	text(hdc, smallFont, 21, 36, "X show / hide   •   Leaderboard place shown for Top 100   •   -stats Player", rgb(139, 149, 166))
 	text(hdc, semiFont, baseWidth-32, 18, "×", rgb(184, 192, 205))
 
 	chip := "WAITING"
@@ -613,11 +621,12 @@ func paint(hwnd uintptr) {
 	y := headerHeight
 	fillRect(hdc, 0, y, baseWidth, y+columnsHeight, rgb(20, 23, 31))
 	text(hdc, smallFont, 20, y+8, "PLAYER", rgb(141, 151, 168))
-	text(hdc, smallFont, 285, y+8, "LVL", rgb(141, 151, 168))
-	text(hdc, smallFont, 346, y+8, "FKDR", rgb(141, 151, 168))
-	text(hdc, smallFont, 419, y+8, "FINALS", rgb(141, 151, 168))
-	text(hdc, smallFont, 505, y+8, "BEDS", rgb(141, 151, 168))
-	text(hdc, smallFont, 574, y+8, "WINS", rgb(141, 151, 168))
+	text(hdc, smallFont, 310, y+8, "LVL", rgb(141, 151, 168))
+	text(hdc, smallFont, 367, y+8, "FKDR", rgb(141, 151, 168))
+	text(hdc, smallFont, 440, y+8, "KILLS", rgb(141, 151, 168))
+	text(hdc, smallFont, 525, y+8, "FINALS", rgb(141, 151, 168))
+	text(hdc, smallFont, 620, y+8, "BEDS", rgb(141, 151, 168))
+	text(hdc, smallFont, 705, y+8, "WINS", rgb(141, 151, 168))
 
 	y += columnsHeight
 	if len(rows) == 0 {
@@ -641,6 +650,9 @@ func paint(hwnd uintptr) {
 			}
 			name := p.Username
 			nameColor := rgb(231, 235, 242)
+			if p.GamesRank != "" {
+				name += " [" + p.GamesRank + "]"
+			}
 			if isDangerous(p) {
 				name += "  [!]"
 				nameColor = statRed
@@ -655,32 +667,33 @@ func paint(hwnd uintptr) {
 			// avatar service (common for cracked/offline accounts), the row simply
 			// renders without a head and everything else still works.
 			if av := getAvatar(p.Username); av != nil {
-				drawAvatar(hdc, 18, ry+5, 26, 26, av)
+				drawAvatar(hdc, 18, ry+14, 26, 26, av)
 			}
-			text(hdc, semiFont, 52, ry+11, name, nameColor)
+			text(hdc, semiFont, 52, ry+10, name, nameColor)
 			if p.State == "loading" {
-				text(hdc, smallFont, 285, ry+12, "Loading...", rgb(126, 143, 170))
+				text(hdc, smallFont, 310, ry+19, "Loading...", rgb(126, 143, 170))
 				continue
 			}
 			if p.State == "unavailable" {
-				text(hdc, smallFont, 285, ry+12, "Stats unavailable", rgb(178, 132, 136))
+				text(hdc, smallFont, 310, ry+19, "Stats unavailable", rgb(178, 132, 136))
 				continue
 			}
 			if p.State == "api" {
-				text(hdc, smallFont, 285, ry+12, "API unavailable", rgb(178, 132, 136))
+				text(hdc, smallFont, 310, ry+19, "API unavailable", rgb(178, 132, 136))
 				continue
 			}
-			text(hdc, bodyFont, 285, ry+10, fmt.Sprintf("%d", p.Level), levelColor(p.Level))
+			text(hdc, bodyFont, 310, ry+10, fmt.Sprintf("%d", p.Level), levelColor(p.Level))
 			fk := "0.00"
 			if p.Infinite {
 				fk = "∞"
 			} else {
 				fk = fmt.Sprintf("%.2f", p.FKDR)
 			}
-			text(hdc, bodyFont, 346, ry+10, fk, fkdrColor(p.FKDR, p.Infinite))
-			text(hdc, bodyFont, 419, ry+10, comma(p.FinalKills), finalsColor(p.FinalKills))
-			text(hdc, bodyFont, 505, ry+10, comma(p.Beds), bedsColor(p.Beds))
-			text(hdc, bodyFont, 574, ry+10, comma(p.Wins), winsColor(p.Wins))
+			text(hdc, bodyFont, 367, ry+10, fk, fkdrColor(p.FKDR, p.Infinite))
+			drawStatWithLeaderboardPlace(hdc, bodyFont, semiFont, 440, ry, p.Kills, statGray, p.KillsPlace)
+			drawStatWithLeaderboardPlace(hdc, bodyFont, semiFont, 525, ry, p.FinalKills, finalsColor(p.FinalKills), p.FinalsPlace)
+			drawStatWithLeaderboardPlace(hdc, bodyFont, semiFont, 620, ry, p.Beds, bedsColor(p.Beds), p.BedsPlace)
+			drawStatWithLeaderboardPlace(hdc, bodyFont, semiFont, 705, ry, p.Wins, winsColor(p.Wins), p.WinsPlace)
 		}
 	}
 
@@ -691,7 +704,7 @@ func paint(hwnd uintptr) {
 		foot = foot[:73] + "..."
 	}
 	if pika && len(rows) > 0 {
-		foot = fmt.Sprintf("%d player%s • AUTO ranked strongest → weakest • [!] threat • [ALT] suspicious stat mismatch • X toggles", len(rows), plural(len(rows)))
+		foot = fmt.Sprintf("%d player%s • BedWars %s / %s • Top 100 ranks are bold and coloured", len(rows), plural(len(rows)), leaderboardIntervalLabel(), leaderboardModeLabel())
 	}
 	if logPath != "" && !pika {
 		foot = "Lunar log found • waiting for PikaNetwork"
@@ -993,6 +1006,58 @@ func winsColor(v int64) uintptr {
 	// The user only specified gray below 100 and green from 500 upward.
 	// Keep the 100-499 middle band neutral instead of inventing another tier.
 	return rgb(218, 223, 232)
+}
+
+// A Top-100 placement is stronger evidence than a large raw stat total, so it
+// receives its own danger ladder. #2 and #3 are deliberately bold dark red.
+func leaderboardPlaceColor(place int64) uintptr {
+	switch {
+	case place == 1:
+		return rgb(125, 68, 180) // deep purple: #1
+	case place <= 3:
+		return rgb(139, 38, 44) // dark red: #2-#3
+	case place <= 10:
+		return statRed
+	case place <= 25:
+		return rgb(227, 112, 59)
+	case place <= 50:
+		return statOrange
+	default:
+		return rgb(231, 196, 82) // #51-#100
+	}
+}
+
+func drawStatWithLeaderboardPlace(hdc, valueFont, placeFont uintptr, x, y int32, value int64, valueColor uintptr, place int64) {
+	text(hdc, valueFont, x, y+7, comma(value), valueColor)
+	if place > 0 && place <= 100 {
+		text(hdc, placeFont, x, y+29, fmt.Sprintf("#%d", place), leaderboardPlaceColor(place))
+	}
+}
+
+func leaderboardIntervalLabel() string {
+	switch leaderboardInterval {
+	case "weekly":
+		return "Weekly"
+	case "monthly":
+		return "Monthly"
+	default:
+		return "Lifetime"
+	}
+}
+
+func leaderboardModeLabel() string {
+	switch leaderboardMode {
+	case "SOLO":
+		return "Solo"
+	case "DOUBLES":
+		return "Doubles"
+	case "TRIPLES":
+		return "Triples"
+	case "QUADS":
+		return "Quads"
+	default:
+		return "All Modes"
+	}
 }
 
 func makeFont(px int32, weight int32) uintptr {
@@ -2077,8 +2142,9 @@ func fetchStats(name string) *PlayerStats {
 	} else if v, ok := findKeyNumber(profile, "level"); ok {
 		s.Level = int64(v)
 	}
+	s.GamesRank = gamesRankDisplay(profile)
 
-	lbURL := "https://stats.pika-network.net/api/profile/" + name + "/leaderboard?type=bedwars&interval=total&mode=ALL_MODES"
+	lbURL := "https://stats.pika-network.net/api/profile/" + name + "/leaderboard?type=bedwars&interval=" + leaderboardInterval + "&mode=" + leaderboardMode
 	var lb any
 	code, err = getJSON(lbURL, &lb)
 	if err != nil {
@@ -2087,10 +2153,11 @@ func fetchStats(name string) *PlayerStats {
 		}
 		return s
 	}
-	s.FinalKills = playerLeaderboardValue(lb, "Final kills", name)
-	s.FinalDeaths = playerLeaderboardValue(lb, "Final deaths", name)
-	s.Beds = playerLeaderboardValue(lb, "Beds destroyed", name)
-	s.Wins = playerLeaderboardValue(lb, "Wins", name)
+	s.Kills, s.KillsPlace = playerLeaderboardEntry(lb, "Kills", name)
+	s.FinalKills, s.FinalsPlace = playerLeaderboardEntry(lb, "Final kills", name)
+	s.FinalDeaths, _ = playerLeaderboardEntry(lb, "Final deaths", name)
+	s.Beds, s.BedsPlace = playerLeaderboardEntry(lb, "Beds destroyed", name)
+	s.Wins, s.WinsPlace = playerLeaderboardEntry(lb, "Wins", name)
 	s.GamesPlayed = playerLeaderboardValue(lb, "Games played", name)
 	s.Losses = playerLeaderboardValue(lb, "Losses", name)
 	if s.FinalDeaths == 0 {
@@ -2158,9 +2225,17 @@ func getJSON(url string, out any) (int, error) {
 }
 
 func playerLeaderboardValue(v any, statName, username string) int64 {
+	value, _ := playerLeaderboardEntry(v, statName, username)
+	return value
+}
+
+// playerLeaderboardEntry reads the selected player's actual stat value and
+// global placement from the profile leaderboard response. metadata.total is
+// only the count of ranked records and must never be used as the player's stat.
+func playerLeaderboardEntry(v any, statName, username string) (int64, int64) {
 	root, ok := v.(map[string]any)
 	if !ok {
-		return 0
+		return 0, 0
 	}
 	var stat any
 	for k, val := range root {
@@ -2171,14 +2246,12 @@ func playerLeaderboardValue(v any, statName, username string) int64 {
 	}
 	obj, ok := stat.(map[string]any)
 	if !ok {
-		return 0
+		return 0, 0
 	}
 	entries, ok := obj["entries"].([]any)
 	if !ok || len(entries) == 0 {
-		return 0
+		return 0, 0
 	}
-	// The API's metadata.total is the GLOBAL number of players/stat records,
-	// not this player's value. Only entries[].value is a player statistic.
 	for _, raw := range entries {
 		e, ok := raw.(map[string]any)
 		if !ok {
@@ -2188,17 +2261,44 @@ func playerLeaderboardValue(v any, statName, username string) int64 {
 			continue
 		}
 		if n, ok := scalarNumber(e["value"]); ok {
-			return int64(n)
+			place, _ := scalarNumber(e["place"])
+			return int64(n), int64(place)
 		}
 	}
 	// Some responses may omit/normalize the id. Fall back to the first entry,
 	// but still never read metadata.total.
 	if e, ok := entries[0].(map[string]any); ok {
 		if n, ok := scalarNumber(e["value"]); ok {
-			return int64(n)
+			place, _ := scalarNumber(e["place"])
+			return int64(n), int64(place)
 		}
 	}
-	return 0
+	return 0, 0
+}
+
+// Only the minigames rank is relevant in a BedWars overlay. Other Pika
+// gamemode ranks (Prison, Survival, SkyPvP, etc.) are intentionally ignored.
+func gamesRankDisplay(profile any) string {
+	root, ok := profile.(map[string]any)
+	if !ok {
+		return ""
+	}
+	rawRanks, ok := root["ranks"].([]any)
+	if !ok {
+		return ""
+	}
+	for _, raw := range rawRanks {
+		rank, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		server, _ := rank["server"].(string)
+		displayName, _ := rank["displayName"].(string)
+		if strings.EqualFold(server, "games") && strings.TrimSpace(displayName) != "" {
+			return strings.TrimSpace(displayName)
+		}
+	}
+	return ""
 }
 
 func scalarNumber(v any) (float64, bool) {
@@ -2362,8 +2462,10 @@ func configPath() string {
 }
 
 type config struct {
-	X int32 `json:"x"`
-	Y int32 `json:"y"`
+	X                   int32  `json:"x"`
+	Y                   int32  `json:"y"`
+	LeaderboardInterval string `json:"leaderboardInterval"`
+	LeaderboardMode     string `json:"leaderboardMode"`
 }
 
 func init() {
@@ -2374,6 +2476,8 @@ func init() {
 		if json.Unmarshal(b, &c) == nil {
 			state.X = c.X
 			state.Y = c.Y
+			leaderboardInterval = normalizeLeaderboardInterval(c.LeaderboardInterval)
+			leaderboardMode = normalizeLeaderboardMode(c.LeaderboardMode)
 		}
 	}
 }
@@ -2386,8 +2490,42 @@ func saveWindowPosition(hwnd uintptr) {
 		state.Unlock()
 		p := configPath()
 		_ = os.MkdirAll(filepath.Dir(p), 0755)
-		b, _ := json.MarshalIndent(config{X: r.Left, Y: r.Top}, "", "  ")
+		b, _ := json.MarshalIndent(config{
+			X: r.Left, Y: r.Top,
+			LeaderboardInterval: leaderboardInterval,
+			LeaderboardMode:     leaderboardMode,
+		}, "", "  ")
 		_ = os.WriteFile(p, b, 0644)
+	}
+}
+
+func normalizeLeaderboardInterval(v string) string {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "weekly":
+		return "weekly"
+	case "monthly":
+		return "monthly"
+	case "total", "lifetime", "":
+		return "total"
+	default:
+		return "total"
+	}
+}
+
+func normalizeLeaderboardMode(v string) string {
+	switch strings.ToUpper(strings.TrimSpace(v)) {
+	case "SOLO":
+		return "SOLO"
+	case "DOUBLES":
+		return "DOUBLES"
+	case "TRIPLES":
+		return "TRIPLES"
+	case "QUADS":
+		return "QUADS"
+	case "ALL", "ALL_MODES", "":
+		return "ALL_MODES"
+	default:
+		return "ALL_MODES"
 	}
 }
 
