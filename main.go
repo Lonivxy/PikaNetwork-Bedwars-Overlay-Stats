@@ -1526,29 +1526,23 @@ func watchTabKey() {
 		down := int16(r&0xffff) < 0
 		if down && !wasDown {
 			now := time.Now()
-			debugf("TAB pressed; using roster candidate from just before/after TAB")
+			debugf("TAB pressed; clearing old roster and waiting for a fresh Badlion completion line")
 			state.Lock()
 			state.ScanUntil = now.Add(4 * time.Second)
 			state.Status = "TAB pressed • reading player roster..."
+			// Every TAB is a new lobby snapshot. Never leave players from the
+			// previous queue visible while waiting for Badlion's new completion.
+			state.Players = make(map[string]*PlayerStats)
+			state.Order = nil
 			state.Unlock()
 
 			rosterCandidateMu.Lock()
 			lastTabAt = now
-			cached := append([]string(nil), rosterCandidate...)
-			cachedAt := rosterCandidateAt
+			// A Badlion [CHAT] comma-list can remain in latest.log for minutes.
+			// Discard it here; only a line emitted after this TAB is a valid roster.
+			rosterCandidate = nil
+			rosterCandidateAt = time.Time{}
 			rosterCandidateMu.Unlock()
-			// Minecraft can write the autocomplete line before our 20ms key poll
-			// notices TAB. Accept a candidate captured just before this event.
-			if len(cached) >= 3 && now.Sub(cachedAt) >= 0 && now.Sub(cachedAt) <= 1200*time.Millisecond {
-				debugf("using pre-TAB cached roster (%d): %s", len(cached), strings.Join(cached, ", "))
-				setRoster(cached)
-				state.Lock()
-				state.ScanUntil = time.Time{}
-				state.Unlock()
-				rosterCandidateMu.Lock()
-				lastTabAt = time.Time{}
-				rosterCandidateMu.Unlock()
-			}
 			notifyRefresh()
 		}
 		wasDown = down
