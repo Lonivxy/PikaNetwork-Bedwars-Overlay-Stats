@@ -269,7 +269,8 @@ var showKills = true
 var showFinals = true
 var showBeds = true
 var showWins = true
-var toggleKey uint16 = VK_X
+var toggleKeyCode uint32 = VK_X
+var shortcutCapturing int32
 var refreshPending int32
 var requestQueue = make(chan string, 64)
 var queuedMu sync.Mutex
@@ -794,11 +795,13 @@ func paintSettings(hdc, bodyFont, smallFont, semiFont uintptr) {
 	text(hdc, semiFont, 170, y+228, "Doubles", rgb(231, 235, 242))
 	text(hdc, semiFont, 270, y+228, "Triples", rgb(231, 235, 242))
 	text(hdc, semiFont, 365, y+228, "Quads", rgb(231, 235, 242))
-	text(hdc, smallFont, 20, y+260, "Show/hide shortcut: "+toggleKeyLabel()+"   (choose: X, F8, F9, F10)", rgb(139, 149, 166))
-	text(hdc, semiFont, 20, y+281, "X", rgb(231, 235, 242))
-	text(hdc, semiFont, 75, y+281, "F8", rgb(231, 235, 242))
-	text(hdc, semiFont, 140, y+281, "F9", rgb(231, 235, 242))
-	text(hdc, semiFont, 205, y+281, "F10", rgb(231, 235, 242))
+	shortcutText := "Show/hide shortcut: " + toggleKeyLabel()
+	if atomic.LoadInt32(&shortcutCapturing) != 0 {
+		shortcutText = "Press any key now..."
+	}
+	text(hdc, smallFont, 20, y+260, shortcutText, rgb(139, 149, 166))
+	drawRoundBox(hdc, 20, y+272, 205, y+296, 10, rgb(39, 46, 59), rgb(77, 88, 108))
+	text(hdc, semiFont, 34, y+278, "Set custom shortcut", rgb(231, 235, 242))
 }
 
 func drawSettingToggle(hdc, font uintptr, x, y int32, label string, enabled bool) {
@@ -851,19 +854,8 @@ func handleSettingsClick(hwnd uintptr, x, y int32) bool {
 		default:
 			return false
 		}
-	} else if rel >= 265 && rel < 300 {
-		switch {
-		case x < 55:
-			toggleKey = VK_X
-		case x < 125:
-			toggleKey = VK_F8
-		case x < 190:
-			toggleKey = VK_F9
-		case x < 270:
-			toggleKey = VK_F10
-		default:
-			return false
-		}
+	} else if rel >= 265 && rel < 300 && x < 210 {
+		atomic.StoreInt32(&shortcutCapturing, 1)
 	} else {
 		return false
 	}
@@ -1465,7 +1457,21 @@ func discoverLogCandidates() []string {
 func watchToggleKey() {
 	wasDown := false
 	for {
-		r, _, _ := procGetAsyncKeyState.Call(uintptr(toggleKey))
+		if atomic.LoadInt32(&shortcutCapturing) != 0 {
+			for key := uint32(8); key <= 254; key++ {
+				r, _, _ := procGetAsyncKeyState.Call(uintptr(key))
+				if int16(r&0xffff) < 0 {
+					atomic.StoreUint32(&toggleKeyCode, key)
+					atomic.StoreInt32(&shortcutCapturing, 0)
+					saveConfig()
+					notifyRefresh()
+					break
+				}
+			}
+			time.Sleep(18 * time.Millisecond)
+			continue
+		}
+		r, _, _ := procGetAsyncKeyState.Call(uintptr(atomic.LoadUint32(&toggleKeyCode)))
 		down := int16(r&0xffff) < 0
 		if down && !wasDown {
 			state.RLock()
@@ -2649,9 +2655,9 @@ func init() {
 			leaderboardInterval = normalizeLeaderboardInterval(c.LeaderboardInterval)
 			leaderboardMode = normalizeLeaderboardMode(c.LeaderboardMode)
 			if c.SettingsVersion >= 1 {
-				showLevel, showFKDR, showKills, showFinals, showBeds, showWins, toggleKey = c.ShowLevel, c.ShowFKDR, c.ShowKills, c.ShowFinals, c.ShowBeds, c.ShowWins, c.ToggleKey
-				if toggleKey == 0 {
-					toggleKey = VK_X
+				showLevel, showFKDR, showKills, showFinals, showBeds, showWins = c.ShowLevel, c.ShowFKDR, c.ShowKills, c.ShowFinals, c.ShowBeds, c.ShowWins
+				if c.ToggleKey != 0 {
+					atomic.StoreUint32(&toggleKeyCode, uint32(c.ToggleKey))
 				}
 			}
 		}
@@ -2677,21 +2683,32 @@ func saveConfigAt(x, y int32) {
 		X: x, Y: y,
 		LeaderboardInterval: leaderboardInterval,
 		LeaderboardMode:     leaderboardMode,
-		ShowLevel:           showLevel, ShowFKDR: showFKDR, ShowKills: showKills, ShowFinals: showFinals, ShowBeds: showBeds, ShowWins: showWins, ToggleKey: toggleKey, SettingsVersion: 1,
+		ShowLevel:           showLevel, ShowFKDR: showFKDR, ShowKills: showKills, ShowFinals: showFinals, ShowBeds: showBeds, ShowWins: showWins, ToggleKey: uint16(atomic.LoadUint32(&toggleKeyCode)), SettingsVersion: 1,
 	}, "", "  ")
 	_ = os.WriteFile(p, b, 0644)
 }
 
 func toggleKeyLabel() string {
-	switch toggleKey {
+	key := atomic.LoadUint32(&toggleKeyCode)
+	if key >= 'A' && key <= 'Z' {
+		return string(rune(key))
+	}
+	if key >= '0' && key <= '9' {
+		return string(rune(key))
+	}
+	switch key {
 	case VK_F8:
 		return "F8"
 	case VK_F9:
 		return "F9"
 	case VK_F10:
 		return "F10"
+	case VK_TAB:
+		return "TAB"
+	case VK_RETURN:
+		return "ENTER"
 	default:
-		return "X"
+		return fmt.Sprintf("VK-%d", key)
 	}
 }
 
