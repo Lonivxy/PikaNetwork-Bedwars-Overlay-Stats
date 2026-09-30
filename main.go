@@ -1310,6 +1310,12 @@ func watchLunarLog() {
 					}
 					cursors[path] = &logCursor{Offset: off}
 					learnLocalUsernameFromFile(path)
+					// Badlion can rotate latest.log while the overlay is already
+					// running. Replay the active tail once so its Pika connection
+					// line is not lost between rotation and the next log poll.
+					if time.Since(fi.ModTime()) < 90*time.Second {
+						replayRecentLogTail(path)
+					}
 					debugf("watching candidate log: %s (size=%d offset=%d modified=%s)", path, fi.Size(), off, fi.ModTime().Format(time.RFC3339))
 				}
 			}
@@ -1369,6 +1375,33 @@ func watchLunarLog() {
 			notifyRefresh()
 		}
 		time.Sleep(180 * time.Millisecond)
+	}
+}
+
+func replayRecentLogTail(path string) {
+	f, err := os.Open(path)
+	if err != nil {
+		debugf("recent log replay open failed: %s: %v", path, err)
+		return
+	}
+	defer f.Close()
+	fi, err := f.Stat()
+	if err != nil {
+		return
+	}
+	const maxTail = int64(512 * 1024)
+	off := fi.Size() - maxTail
+	if off < 0 {
+		off = 0
+	}
+	_, _ = f.Seek(off, io.SeekStart)
+	b, err := io.ReadAll(io.LimitReader(f, maxTail))
+	if err != nil {
+		debugf("recent log replay read failed: %s: %v", path, err)
+		return
+	}
+	for _, line := range strings.Split(string(b), "\n") {
+		processLogLine(strings.TrimRight(line, "\r"))
 	}
 }
 
