@@ -33,7 +33,7 @@ const (
 	baseWidth      = int32(790)
 	headerHeight   = int32(58)
 	columnsHeight  = int32(30)
-	rowHeight      = int32(54)
+	rowHeight      = int32(36)
 	footerHeight   = int32(28)
 	minBodyHeight  = int32(64)
 	maxPlayers     = 32
@@ -667,19 +667,19 @@ func paint(hwnd uintptr) {
 			// avatar service (common for cracked/offline accounts), the row simply
 			// renders without a head and everything else still works.
 			if av := getAvatar(p.Username); av != nil {
-				drawAvatar(hdc, 18, ry+14, 26, 26, av)
+				drawAvatar(hdc, 18, ry+5, 26, 26, av)
 			}
-			text(hdc, semiFont, 52, ry+10, name, nameColor)
+			text(hdc, semiFont, 52, ry+11, name, nameColor)
 			if p.State == "loading" {
-				text(hdc, smallFont, 310, ry+19, "Loading...", rgb(126, 143, 170))
+				text(hdc, smallFont, 310, ry+12, "Loading...", rgb(126, 143, 170))
 				continue
 			}
 			if p.State == "unavailable" {
-				text(hdc, smallFont, 310, ry+19, "Stats unavailable", rgb(178, 132, 136))
+				text(hdc, smallFont, 310, ry+12, "Stats unavailable", rgb(178, 132, 136))
 				continue
 			}
 			if p.State == "api" {
-				text(hdc, smallFont, 310, ry+19, "API unavailable", rgb(178, 132, 136))
+				text(hdc, smallFont, 310, ry+12, "API unavailable", rgb(178, 132, 136))
 				continue
 			}
 			text(hdc, bodyFont, 310, ry+10, fmt.Sprintf("%d", p.Level), levelColor(p.Level))
@@ -1028,9 +1028,11 @@ func leaderboardPlaceColor(place int64) uintptr {
 }
 
 func drawStatWithLeaderboardPlace(hdc, valueFont, placeFont uintptr, x, y int32, value int64, valueColor uintptr, place int64) {
-	text(hdc, valueFont, x, y+7, comma(value), valueColor)
+	valueText := comma(value)
+	text(hdc, valueFont, x, y+10, valueText, valueColor)
 	if place > 0 && place <= 100 {
-		text(hdc, placeFont, x, y+29, fmt.Sprintf("#%d", place), leaderboardPlaceColor(place))
+		// The placement remains on the same row as the stat: "9,999 #2".
+		text(hdc, placeFont, x+int32(len(valueText)*8+5), y+11, fmt.Sprintf("#%d", place), leaderboardPlaceColor(place))
 	}
 }
 

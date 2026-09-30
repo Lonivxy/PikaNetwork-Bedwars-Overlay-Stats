@@ -53,7 +53,7 @@ Press **X** to show or hide the overlay.
 
 ## Leaderboard places and settings
 
-The overlay shows a player's global place (`#1` through `#100`) below **Kills**, **Final Kills**, **Beds**, and **Wins** when the player is in the Top 100 for that statistic.
+The overlay shows a player's global place (`#1` through `#100`) immediately after **Kills**, **Final Kills**, **Beds**, and **Wins** when the player is in the Top 100 for that statistic, for example `9,999 #2`.
 
 - `#1` is deep purple.
 - `#2–#3` are bold dark red.
