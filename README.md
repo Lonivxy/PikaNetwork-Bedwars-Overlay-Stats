@@ -302,7 +302,7 @@ If player detection fails:
 
 1. Confirm Lunar Client is running Minecraft 1.8.x.
 2. Join a PikaNetwork BedWars waiting lobby.
-3. Press `T`, one space, `TAB`, then `Esc`.
+3. Open chat with your normal chat key, type one space, press `TAB`, then `Esc`.
 4. Check:
 
 ```text

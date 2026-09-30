@@ -903,7 +903,7 @@ func paint(hwnd uintptr) {
 		sub := "Open chat, type one space, then press TAB. Player names are read from Lunar's active log."
 		if !pika {
 			msg = "Waiting for PikaNetwork..."
-			sub = "Join PikaNetwork, then use T → Space → TAB in the BedWars queue."
+			sub = "Join PikaNetwork, open chat, type one space, then press TAB in the BedWars queue."
 		}
 		text(hdc, bodyFont, 20, y+18, msg, rgb(224, 229, 238))
 		text(hdc, smallFont, 20, y+43, sub, rgb(132, 142, 158))
@@ -1875,7 +1875,7 @@ func processLogLine(line string) {
 		changed := !state.BedWars
 		state.BedWars = true
 		if state.Pika && changed {
-			state.Status = "Pika BedWars • T → Space → TAB to scan roster"
+			state.Status = "Pika BedWars • chat key → Space → TAB to scan roster"
 		}
 		state.Unlock()
 		if changed {
@@ -2305,7 +2305,7 @@ func markPika() {
 	was := state.Pika
 	state.Pika = true
 	if state.Status == "" || !was {
-		state.Status = "PikaNetwork detected • press T, Space, TAB to scan players"
+		state.Status = "PikaNetwork detected • open chat, press Space, then TAB to scan players"
 	}
 	state.Unlock()
 	autoShow()
@@ -2749,7 +2749,8 @@ func playerLeaderboardEntry(v any, statName, username string) (int64, int64) {
 		if !ok {
 			continue
 		}
-		if id, _ := e["id"].(string); id != "" && !strings.EqualFold(id, username) {
+		id, _ := e["id"].(string)
+		if !strings.EqualFold(id, username) && !(id == "" && len(entries) == 1) {
 			continue
 		}
 		if n, ok := scalarNumber(e["value"]); ok {
@@ -2757,9 +2758,14 @@ func playerLeaderboardEntry(v any, statName, username string) (int64, int64) {
 			return int64(n), int64(place)
 		}
 	}
-	// Some responses may omit/normalize the id. Fall back to the first entry,
-	// but still never read metadata.total.
-	if e, ok := entries[0].(map[string]any); ok {
+	// A single entry with no id is still safe to use: profile responses from
+	// some API versions omit the id field. Never use the first entry from a
+	// multi-entry response because that could belong to another player.
+	if len(entries) == 1 {
+		e, ok := entries[0].(map[string]any)
+		if !ok {
+			return 0, 0
+		}
 		if n, ok := scalarNumber(e["value"]); ok {
 			place, _ := scalarNumber(e["place"])
 			return int64(n), int64(place)
